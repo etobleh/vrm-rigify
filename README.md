@@ -34,11 +34,10 @@ collide with the names of the control bones that Rigify generates (`chest`,
    <img src="docs/enable.png" width="256px">
 
 6. Ensure the addons `Import-Export: VRM format` and `Rigging: Rigify` are also enabled.
-7. In the same `Blender Preferences` window, go to `Interface`.
-8. Check the box labelled `Developer Extras`. This is necessary to show the addon's commands in Blender's operator
-   search menu:
 
-   <img src="docs/developer.png" width="384px">
+When replacing an already enabled version of VRM Rigify, restart Blender after
+installing the update so Blender does not keep the previous Python operator in
+memory.
 
 ## Usage
 
@@ -52,49 +51,35 @@ collide with the names of the control bones that Rigify generates (`chest`,
 
    <img src="docs/select_armature.png" width="384px">
 
-3. Go to `Edit` > `Operator Search...` or press `F3`:
-
-   <img src="docs/operator_search.png" width="256px">
-
-4. Search for `Generate Rigify armature for VRM model` and press `Enter`:
+3. With the mouse over the 3D Viewport, go to `Object` > `Generate Rigify armature for VRM model`. Alternatively, press
+   `F3`, search for `Generate Rigify armature for VRM model`, and press `Enter`:
 
    <img src="docs/generate_rig.png" width="384px">
 
-5. The Rigify armature has now been generated! It will appear as `Armature.rig` in the outliner:
+4. The Rigify armature has now been generated! It will appear as `Armature.rig` in the outliner:
 
    <img src="docs/new_outliner.png" width="384px">
 
    Note that location of `Armature.rig` and `Armature.metarig` in the outliner may differ depending on the last selected
    collection.
 
-### Parenting the meshes to the armature
+   The addon also automatically:
 
-1. Expand the (now hidden) imported armature object and select the meshes inside it:
+   - Runs Blender's Armature Deform parenting operation for all imported meshes, preserving their transforms.
+   - Retargets their armature modifiers to the generated rig.
+   - Moves armature modifiers before all other modifiers.
+   - Hides the imported armature and metarig.
+   - Selects the generated rig and enters Pose Mode so it is ready to use.
 
-   <img src="docs/select_meshes.png" width="384px">
-
-2. While the meshes are selected, select the generated `Armature.rig` Rigify armature.
-3. Right click and select `Parent` > `Armature Deform`:
-
-   <img src="docs/parent_meshes.png" width="384px">
-
-4. The meshes should now be parented to the new armature. Expand the contents of the
-   new armature object in the outliner:
+   Blender displays a success message with the generated rig name and the
+   number of mesh objects attached. No manual parenting step is required.
 
    <img src="docs/meshes_under_rig.png" width="384px">
 
-5. For each mesh, under their `Modifiers`, move any armature modifiers to the top of
-   the modifier list, before all other modifiers:
+### Optional cleanup
 
-   <img src="docs/mesh_modifiers.png" width="384px">
-
-   You do not have to do this if there are no other modifiers present.
-
-6. You can now pose the model by entering `Pose Mode`:
-
-   <img src="docs/pose.png" width="256px">
-
-7. (Optional) Remove any objects that are no longer needed:
+The hidden original VRM armature and metarig are retained for inspection or regeneration. You can delete them once you
+are satisfied with the generated rig:
 
    <img src="docs/delete.png" width="384px">
 

@@ -6,13 +6,17 @@ bl_info = {
     "name": "VRM Rigify",
     "author": "Nanoskript",
     "description": "Generates Rigify armatures for VRM models",
-    "version": (0, 3, 0),
+    "version": (0, 4, 2),
     "blender": (4, 1, 0),
-    "location": "Operator Search > VRM Rigify",
+    "location": "3D Viewport > Object",
     "doc_url": "https://github.com/nanoskript/vrm-rigify",
     "tracker_url": "https://github.com/nanoskript/vrm-rigify/issues",
     "category": "Rigging",
 }
+
+
+def addon_version_string():
+    return ".".join(str(component) for component in bl_info["version"])
 
 
 class ModeContext:
@@ -310,14 +314,142 @@ def disable_ik_stretching(rig_object: bpy.types.Object):
             bone[stretch_key] = 0.0
 
 
+def move_armature_modifiers_to_top(mesh_object: bpy.types.Object):
+    armature_modifiers = [
+        modifier for modifier in mesh_object.modifiers
+        if modifier.type == "ARMATURE"
+    ]
+
+    bpy.context.view_layer.objects.active = mesh_object
+    mesh_object.select_set(True)
+    for target_index, modifier in enumerate(armature_modifiers):
+        while list(mesh_object.modifiers).index(modifier) > target_index:
+            result = bpy.ops.object.modifier_move_up(modifier=modifier.name)
+            if result != {"FINISHED"}:
+                raise Exception(
+                    f"Failed to move armature modifier '{modifier.name}' "
+                    f"on mesh '{mesh_object.name}'"
+                )
+
+
+def vrm_model_mesh_objects(vrm_object: bpy.types.Object):
+    descendants = set(vrm_object.children_recursive)
+    return [
+        node for node in bpy.context.view_layer.objects
+        if node.type == "MESH" and (
+            node in descendants
+            or any(
+                modifier.type == "ARMATURE"
+                and modifier.object == vrm_object
+                for modifier in node.modifiers
+            )
+        )
+    ]
+
+
+def attach_vrm_model_meshes_to_rig(
+    rig_object: bpy.types.Object,
+    vrm_object: bpy.types.Object,
+) -> list[bpy.types.Object]:
+    mesh_objects = vrm_model_mesh_objects(vrm_object)
+    if not mesh_objects:
+        raise Exception(f"No meshes found for VRM armature '{vrm_object.name}'")
+
+    # Use Blender's Armature Deform parenting operation rather than emulating
+    # it with direct property assignments. Besides creating the parent
+    # relationship, the operation initializes the armature modifier and parent
+    # inverse in the same way as Object > Parent > Armature Deform.
+    bpy.ops.object.select_all(action="DESELECT")
+    for mesh_object in mesh_objects:
+        mesh_object.select_set(True)
+    rig_object.select_set(True)
+    bpy.context.view_layer.objects.active = rig_object
+    result = bpy.ops.object.parent_set(type="ARMATURE")
+    if result != {"FINISHED"}:
+        raise Exception("Failed to parent VRM meshes to the generated rig")
+
+    for mesh_object in mesh_objects:
+        has_rig_modifier = any(
+            modifier.type == "ARMATURE"
+            and modifier.object == rig_object
+            for modifier in mesh_object.modifiers
+        )
+        if mesh_object.parent != rig_object or not has_rig_modifier:
+            raise Exception(
+                f"Armature Deform did not attach mesh '{mesh_object.name}' "
+                f"to rig '{rig_object.name}'"
+            )
+
+        # The new modifier created by the parenting operation replaces the
+        # imported VRM modifier. Keeping both would run two armature deformers
+        # over the same vertex groups.
+        for modifier in list(mesh_object.modifiers):
+            if modifier.type == "ARMATURE" and modifier.object == vrm_object:
+                mesh_object.modifiers.remove(modifier)
+
+        move_armature_modifiers_to_top(mesh_object)
+
+    return mesh_objects
+
+
+def find_vrm_source_armature(rig_object: bpy.types.Object):
+    source_name = rig_object.get("vrm_rigify_source_armature")
+    if source_name:
+        source_object = bpy.data.objects.get(source_name)
+        if source_object is not None and source_object.type == "ARMATURE":
+            return source_object
+
+    candidates = {
+        modifier.object
+        for mesh_object in bpy.context.view_layer.objects
+        if mesh_object.type == "MESH"
+        for modifier in mesh_object.modifiers
+        if modifier.type == "ARMATURE"
+        and modifier.object is not None
+        and modifier.object != rig_object
+    }
+    if len(candidates) != 1:
+        names = sorted(candidate.name for candidate in candidates)
+        raise Exception(
+            "Expected exactly one source VRM armature for "
+            f"'{rig_object.name}', found: {names}"
+        )
+    return candidates.pop()
+
+
+def mark_completed_conversion(
+    rig_object: bpy.types.Object,
+    vrm_object: bpy.types.Object,
+    mesh_objects: list[bpy.types.Object],
+):
+    rig_object["vrm_rigify_version"] = addon_version_string()
+    rig_object["vrm_rigify_source_armature"] = vrm_object.name
+    rig_object["vrm_rigify_attached_mesh_count"] = len(mesh_objects)
+
+
+def enter_pose_mode(rig_object: bpy.types.Object):
+    bpy.ops.object.select_all(action="DESELECT")
+    rig_object.hide_set(False)
+    rig_object.select_set(True)
+    bpy.context.view_layer.objects.active = rig_object
+    bpy.ops.object.mode_set(mode="POSE")
+
+
 class GenerateVRMRig(bpy.types.Operator):
     bl_idname = "vrm_rigify.create_rig"
     bl_label = "Generate Rigify armature for VRM model"
     bl_options = {"REGISTER", "UNDO"}
 
+    @classmethod
+    def poll(cls, context):
+        return (
+            context.mode == "OBJECT"
+            and context.active_object is not None
+            and context.active_object.type == "ARMATURE"
+        )
+
     def execute(self, context):
-        vrm_object = bpy.context.active_object
-        assert vrm_object.type == "ARMATURE"
+        vrm_object = context.active_object
 
         metarig = generate_template_metarig(f"{vrm_object.name}.metarig")
         bone_mapping = compute_metarig_and_vrm_model_bone_mapping(metarig, vrm_object)
@@ -333,9 +465,18 @@ class GenerateVRMRig(bpy.types.Operator):
         attach_unmapped_vrm_model_bones_to_rig(rig_object, vrm_object)
         copy_shape_key_controls_from_vrm_armature(rig_object, vrm_object)
         disable_ik_stretching(rig_object)
+        mesh_objects = attach_vrm_model_meshes_to_rig(rig_object, vrm_object)
 
         metarig.hide_set(True)
         vrm_object.hide_set(True)
+        enter_pose_mode(rig_object)
+        mark_completed_conversion(rig_object, vrm_object, mesh_objects)
+        self.report(
+            {"INFO"},
+            f"VRM Rigify {addon_version_string()}: generated "
+            f"'{rig_object.name}' and attached "
+            f"{len(mesh_objects)} mesh object(s)",
+        )
         return {"FINISHED"}
 
 
@@ -344,13 +485,20 @@ CLASSES = [
 ]
 
 
+def draw_object_menu(self, _context):
+    self.layout.separator()
+    self.layout.operator(GenerateVRMRig.bl_idname)
+
+
 def register():
     for clazz in CLASSES:
         bpy.utils.register_class(clazz)
+    bpy.types.VIEW3D_MT_object.append(draw_object_menu)
 
 
 def unregister():
-    for clazz in CLASSES:
+    bpy.types.VIEW3D_MT_object.remove(draw_object_menu)
+    for clazz in reversed(CLASSES):
         bpy.utils.unregister_class(clazz)
 
 
